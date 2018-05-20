@@ -20,6 +20,7 @@ import random
 import tqdm
 import uuid
 
+from botocore.exceptions import ClientError
 from dateutil.relativedelta import relativedelta
 
 decimal_context = decimal.getcontext()
@@ -68,35 +69,44 @@ def generate_continuous_data(start_dt:datetime.datetime,
 def create_table(dynamo_client, table_name, rcu=5, wcu=5):
     try:
         dynamo_client.delete_table(TableName=table_name)
-        with dynamo_client.get_waiter('table_not_exists') as waiter:
-            waiter.wait(TableName=table_name)
-    except Exception as e:
-        print(e)
-    dynamo_client.create_table(
-            TableName='sparse-data',
-            KeySchema=[{
-                'AttributeName': 'sid',
-                'KeyType': 'HASH'
-            },
-            {
-                'AttributeName': 'unixtime',
-                'KeyType': 'RANGE'
-            }],
-            AttributeDefinitions=[{
-                'AttributeName': 'sid',
-                'AttributeType': 'S'
-            },
-            {
-                'AttributeName': 'unixtime',
-                'AttributeType': 'N'
-            }],
-            ProvisionedThroughput={
-                'ReadCapacityUnits': 5,
-                'WriteCapacityUnits': 5
-            }
-    )
-    with dynamo_client.get_waiter('table_exists') as waiter:
-        waiter.wait(TableName=table_name)
+        waiter_noexists = dynamo_client.get_waiter('table_not_exists')
+        waiter_noexists.wait(TableName=table_name)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            print('table: {0} does not exist when trying to delete it.'.format(table_name))
+        else:
+            raise e
+    try:
+        dynamo_client.create_table(
+                TableName='sparse-data',
+                KeySchema=[{
+                    'AttributeName': 'sid',
+                    'KeyType': 'HASH'
+                },
+                {
+                    'AttributeName': 'unixtime',
+                    'KeyType': 'RANGE'
+                }],
+                AttributeDefinitions=[{
+                    'AttributeName': 'sid',
+                    'AttributeType': 'S'
+                },
+                {
+                    'AttributeName': 'unixtime',
+                    'AttributeType': 'N'
+                }],
+                ProvisionedThroughput={
+                    'ReadCapacityUnits': 5,
+                    'WriteCapacityUnits': 5
+                }
+        )
+        waiter_exists = dynamo_client.get_waiter('table_exists')
+        waiter_exists.wait(TableName=table_name)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceInUseException':
+            print('table: {0} already exists when trying to create it.'.format(table_name))
+        else:
+            raise e
 
 def create_tables(dynamo_client):
     create_table(dynamo_client, 'sparse-data')
